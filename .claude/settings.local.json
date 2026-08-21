@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la \"C:/Users/liera/Herd/tec-crm\" 2>/dev/null | head -50; echo \"---\"; ls \"C:/Users/liera/Herd\" 2>/dev/null | head -20)",
+      "Bash(php -v)",
+      "Bash(composer -V)",
+      "Bash(npm -v)",
+      "Read(//c/Users/liera/.config/herd/bin/**)",
+      "Read(//c/Users/liera/AppData/Local/Programs/**)",
+      "Bash(\"C:/Users/liera/.config/herd/bin/php.bat\" -v)",
+      "Read(//c/Users/liera/CONFIG~2/herd/bin/nvm/v26.7.0/**)",
+      "Read(//c/Users/liera/AppData/Roaming/**)",
+      "Bash(\"C:/Users/liera/.config/herd/bin/php.bat\" artisan *)",
+      "Bash(\"C:/Users/liera/.config/herd/bin/herd.bat\" secured *)",
+      "Bash(\"C:/Users/liera/.config/herd/bin/herd.bat\" secure *)",
+      "Bash(npm run *)",
+      "Bash(\"/c/Program Files/nodejs/npm.cmd\" run build)",
+      "Bash(where node *)",
+      "Bash(\"C:/Users/liera/.config/herd/bin/php.exe\" artisan *)",
+      "Bash(/c/Users/liera/.config/herd/bin/php84/php.exe artisan *)",
+      "Bash(\"/c/Program Files/nodejs/npm.cmd\" run dev)",
+      "Bash(netstat -ano)"
+    ]
+  }
+}
