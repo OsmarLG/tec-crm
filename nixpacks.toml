@@ -1,0 +1,13 @@
+[variables]
+NIXPACKS_PHP_ROOT_DIR = "/app/public"
+NIXPACKS_PHP_FALLBACK_PATH = "/index.php"
+NODE_ENV = "production"
+
+[phases.build]
+cmds = [
+    "...",
+    "php artisan package:discover --ansi",
+    "php artisan config:clear --ansi",
+    "php artisan route:clear --ansi",
+    "php artisan view:clear --ansi",
+]

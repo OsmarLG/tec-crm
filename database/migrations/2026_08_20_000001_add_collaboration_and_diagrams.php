@@ -9,31 +9,40 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('project_user', function (Blueprint $table) {
-            $table->foreignId('project_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-            $table->string('role', 30)->default('member');
-            $table->timestamps();
+        if (! Schema::hasTable('project_user')) {
+            Schema::create('project_user', function (Blueprint $table) {
+                $table->foreignId('project_id')->constrained()->cascadeOnDelete();
+                $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+                $table->string('role', 30)->default('member');
+                $table->timestamps();
 
-            $table->primary(['project_id', 'user_id']);
-        });
+                $table->primary(['project_id', 'user_id']);
+            });
+        }
 
-        Schema::create('task_user', function (Blueprint $table) {
-            $table->foreignId('task_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-            $table->timestamps();
+        if (! Schema::hasTable('task_user')) {
+            Schema::create('task_user', function (Blueprint $table) {
+                $table->foreignId('task_id')->constrained()->cascadeOnDelete();
+                $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+                $table->timestamps();
 
-            $table->primary(['task_id', 'user_id']);
-        });
+                $table->primary(['task_id', 'user_id']);
+            });
+        }
 
-        Schema::table('tasks', function (Blueprint $table) {
-            $table->json('details')->nullable()->after('description');
-        });
+        if (! Schema::hasColumn('tasks', 'details')) {
+            Schema::table('tasks', function (Blueprint $table) {
+                $table->json('details')->nullable()->after('description');
+            });
+        }
 
-        Schema::table('project_whiteboards', function (Blueprint $table) {
-            $table->dropUnique(['project_id']);
-            $table->string('name')->default('Diagrama principal')->after('project_id');
-        });
+        $this->allowMultipleWhiteboardsPerProject();
+
+        if (! Schema::hasColumn('project_whiteboards', 'name')) {
+            Schema::table('project_whiteboards', function (Blueprint $table) {
+                $table->string('name')->default('Diagrama principal')->after('project_id');
+            });
+        }
 
         $now = now();
 
@@ -60,8 +69,10 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('project_whiteboards', function (Blueprint $table) {
+            $table->dropForeign(['project_id']);
             $table->dropColumn('name');
             $table->unique('project_id');
+            $table->foreign('project_id')->references('id')->on('projects')->cascadeOnDelete();
         });
 
         Schema::table('tasks', function (Blueprint $table) {
@@ -70,5 +81,65 @@ return new class extends Migration
 
         Schema::dropIfExists('task_user');
         Schema::dropIfExists('project_user');
+    }
+
+    private function allowMultipleWhiteboardsPerProject(): void
+    {
+        if (DB::getDriverName() !== 'mysql') {
+            Schema::table('project_whiteboards', function (Blueprint $table) {
+                $table->dropUnique(['project_id']);
+            });
+
+            return;
+        }
+
+        if ($this->mysqlForeignKeyExists('project_whiteboards', 'project_id')) {
+            Schema::table('project_whiteboards', function (Blueprint $table) {
+                $table->dropForeign(['project_id']);
+            });
+        }
+
+        if ($this->mysqlIndexExists('project_whiteboards', 'project_whiteboards_project_id_unique')) {
+            Schema::table('project_whiteboards', function (Blueprint $table) {
+                $table->dropUnique(['project_id']);
+            });
+        }
+
+        if (! $this->mysqlForeignKeyExists('project_whiteboards', 'project_id')) {
+            Schema::table('project_whiteboards', function (Blueprint $table) {
+                $table->foreign('project_id')->references('id')->on('projects')->cascadeOnDelete();
+            });
+        }
+    }
+
+    private function mysqlForeignKeyExists(string $table, string $column): bool
+    {
+        return DB::select(
+            <<<'SQL'
+                select constraint_name
+                from information_schema.key_column_usage
+                where table_schema = database()
+                    and table_name = ?
+                    and column_name = ?
+                    and referenced_table_name is not null
+                limit 1
+            SQL,
+            [$table, $column],
+        ) !== [];
+    }
+
+    private function mysqlIndexExists(string $table, string $index): bool
+    {
+        return DB::select(
+            <<<'SQL'
+                select index_name
+                from information_schema.statistics
+                where table_schema = database()
+                    and table_name = ?
+                    and index_name = ?
+                limit 1
+            SQL,
+            [$table, $index],
+        ) !== [];
     }
 };
