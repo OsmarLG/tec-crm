@@ -26,6 +26,7 @@ import {
     LayoutDashboard,
     ListTodo,
     Network,
+    Pencil,
     Plus,
     RotateCcw,
     Trash2,
@@ -1626,6 +1627,56 @@ function TaskSheet({
     const [processing, setProcessing] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    const [editing, setEditing] = useState(task === null);
+    const status = project.statuses?.find(
+        (projectStatus) => projectStatus.id === statusId,
+    );
+    const assignees = (project.members ?? []).filter((member) =>
+        assigneeIds.includes(member.id),
+    );
+    const detailsText = richTextToPlain(details);
+    const priorityLabels: Record<Task['priority'], string> = {
+        low: 'Baja',
+        medium: 'Media',
+        high: 'Alta',
+        urgent: 'Urgente',
+    };
+
+    const resetForm = () => {
+        setTitle(task?.title ?? '');
+        setStatusId(
+            task?.task_status_id ??
+                initialStatusId ??
+                project.statuses?.[0]?.id ??
+                0,
+        );
+        setPriority(task?.priority ?? 'medium');
+        setDueDate(task?.due_date ?? '');
+        setStartDate(task?.start_date ?? '');
+        setModuleName(task?.module?.name ?? '');
+        setTagNames((task?.tags ?? []).map((tag) => tag.name).join(', '));
+        setAssigneeIds(
+            (task?.assignees ?? (task?.assignee ? [task.assignee] : [])).map(
+                (user) => user.id,
+            ),
+        );
+        setDetails(
+            task?.details ??
+                (task?.description
+                    ? {
+                          type: 'doc',
+                          content: [
+                              {
+                                  type: 'paragraph',
+                                  content: [
+                                      { type: 'text', text: task.description },
+                                  ],
+                              },
+                          ],
+                      }
+                    : emptyDocument),
+        );
+    };
 
     const submit = () => {
         if (!title.trim() || !statusId) {
@@ -1670,225 +1721,369 @@ function TaskSheet({
                 <SheetContent className="w-full overflow-y-auto sm:max-w-2xl">
                     <SheetHeader className="border-b px-6 py-5">
                         <SheetTitle>
-                            {task ? 'Detalles de la tarea' : 'Nueva tarea'}
+                            {task
+                                ? editing
+                                    ? 'Editar tarea'
+                                    : 'Detalle de tarea'
+                                : 'Nueva tarea'}
                         </SheetTitle>
                         <SheetDescription>
-                            Define el trabajo, responsables y fecha objetivo.
+                            {editing
+                                ? 'Actualiza solo lo que necesitas cambiar.'
+                                : 'Consulta la información antes de hacer cambios.'}
                         </SheetDescription>
                     </SheetHeader>
-                    <div className="space-y-5 px-6 pb-6">
-                        <div className="space-y-2">
-                            <Label htmlFor="task-title">Título</Label>
-                            <Input
-                                id="task-title"
-                                value={title}
-                                onChange={(event) =>
-                                    setTitle(event.target.value)
-                                }
-                                placeholder="¿Qué hay que entregar?"
-                                autoFocus
-                            />
-                        </div>
-                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                            <div className="space-y-2">
-                                <Label>Estado</Label>
-                                <Select
-                                    value={String(statusId)}
-                                    onValueChange={(value) =>
-                                        setStatusId(Number(value))
-                                    }
-                                >
-                                    <SelectTrigger className="w-full">
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {(project.statuses ?? []).map(
-                                            (status) => (
-                                                <SelectItem
-                                                    key={status.id}
-                                                    value={String(status.id)}
-                                                >
-                                                    {status.name}
+                    {editing ? (
+                        <>
+                            <div className="space-y-5 px-6 pb-6">
+                                <div className="space-y-2">
+                                    <Label htmlFor="task-title">Título</Label>
+                                    <Input
+                                        id="task-title"
+                                        value={title}
+                                        onChange={(event) =>
+                                            setTitle(event.target.value)
+                                        }
+                                        placeholder="¿Qué hay que entregar?"
+                                        autoFocus={!task}
+                                    />
+                                </div>
+                                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                    <div className="space-y-2">
+                                        <Label>Estado</Label>
+                                        <Select
+                                            value={String(statusId)}
+                                            onValueChange={(value) =>
+                                                setStatusId(Number(value))
+                                            }
+                                        >
+                                            <SelectTrigger className="w-full">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {(project.statuses ?? []).map(
+                                                    (status) => (
+                                                        <SelectItem
+                                                            key={status.id}
+                                                            value={String(
+                                                                status.id,
+                                                            )}
+                                                        >
+                                                            {status.name}
+                                                        </SelectItem>
+                                                    ),
+                                                )}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="task-start-date">
+                                            Fecha de inicio
+                                        </Label>
+                                        <Input
+                                            id="task-start-date"
+                                            type="date"
+                                            value={startDate}
+                                            max={dueDate || undefined}
+                                            onChange={(event) =>
+                                                setStartDate(event.target.value)
+                                            }
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Prioridad</Label>
+                                        <Select
+                                            value={priority}
+                                            onValueChange={(value) =>
+                                                setPriority(
+                                                    value as Task['priority'],
+                                                )
+                                            }
+                                        >
+                                            <SelectTrigger className="w-full">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="low">
+                                                    Baja
                                                 </SelectItem>
+                                                <SelectItem value="medium">
+                                                    Media
+                                                </SelectItem>
+                                                <SelectItem value="high">
+                                                    Alta
+                                                </SelectItem>
+                                                <SelectItem value="urgent">
+                                                    Urgente
+                                                </SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="task-date">
+                                            Fecha objetivo
+                                        </Label>
+                                        <Input
+                                            id="task-date"
+                                            type="date"
+                                            value={dueDate}
+                                            onChange={(event) =>
+                                                setDueDate(event.target.value)
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                                <div className="space-y-3">
+                                    <div className="grid gap-4 sm:grid-cols-2">
+                                        <div className="space-y-2">
+                                            <Label htmlFor="task-module">
+                                                Módulo
+                                            </Label>
+                                            <div className="relative">
+                                                <Boxes className="absolute top-2.5 left-3 size-4 text-muted-foreground" />
+                                                <Input
+                                                    id="task-module"
+                                                    list="project-modules"
+                                                    className="pl-9"
+                                                    value={moduleName}
+                                                    onChange={(event) =>
+                                                        setModuleName(
+                                                            event.target.value,
+                                                        )
+                                                    }
+                                                    placeholder="Servicio Social"
+                                                />
+                                                <datalist id="project-modules">
+                                                    {(
+                                                        project.modules ?? []
+                                                    ).map((module) => (
+                                                        <option
+                                                            key={module.id}
+                                                            value={module.name}
+                                                        />
+                                                    ))}
+                                                </datalist>
+                                            </div>
+                                            <p className="text-xs text-muted-foreground">
+                                                Selecciona uno existente o
+                                                escribe uno nuevo.
+                                            </p>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="task-tags">
+                                                Etiquetas
+                                            </Label>
+                                            <div className="relative">
+                                                <Tags className="absolute top-2.5 left-3 size-4 text-muted-foreground" />
+                                                <Input
+                                                    id="task-tags"
+                                                    className="pl-9"
+                                                    value={tagNames}
+                                                    onChange={(event) =>
+                                                        setTagNames(
+                                                            event.target.value,
+                                                        )
+                                                    }
+                                                    placeholder="backend, reportes, servicio social"
+                                                />
+                                            </div>
+                                            <p className="text-xs text-muted-foreground">
+                                                Separa varias etiquetas con
+                                                comas.
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <Label>Responsables</Label>
+                                    <div className="grid gap-2 rounded-md border p-3 sm:grid-cols-2">
+                                        {(project.members ?? []).map(
+                                            (member) => (
+                                                <label
+                                                    key={member.id}
+                                                    className="flex cursor-pointer items-center gap-3 rounded px-2 py-1.5 hover:bg-muted"
+                                                >
+                                                    <Checkbox
+                                                        checked={assigneeIds.includes(
+                                                            member.id,
+                                                        )}
+                                                        onCheckedChange={(
+                                                            checked,
+                                                        ) =>
+                                                            setAssigneeIds(
+                                                                (current) =>
+                                                                    checked
+                                                                        ? [
+                                                                              ...current,
+                                                                              member.id,
+                                                                          ]
+                                                                        : current.filter(
+                                                                              (
+                                                                                  id,
+                                                                              ) =>
+                                                                                  id !==
+                                                                                  member.id,
+                                                                          ),
+                                                            )
+                                                        }
+                                                    />
+                                                    <Avatar user={member} />
+                                                    <span className="min-w-0 text-sm">
+                                                        <span className="block truncate font-medium">
+                                                            {member.name}
+                                                        </span>
+                                                        <span className="block truncate text-xs text-muted-foreground">
+                                                            {member.email}
+                                                        </span>
+                                                    </span>
+                                                </label>
                                             ),
                                         )}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <Label htmlFor="task-start-date">
-                                    Fecha de inicio
-                                </Label>
-                                <Input
-                                    id="task-start-date"
-                                    type="date"
-                                    value={startDate}
-                                    max={dueDate || undefined}
-                                    onChange={(event) =>
-                                        setStartDate(event.target.value)
-                                    }
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Prioridad</Label>
-                                <Select
-                                    value={priority}
-                                    onValueChange={(value) =>
-                                        setPriority(value as Task['priority'])
-                                    }
-                                >
-                                    <SelectTrigger className="w-full">
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="low">
-                                            Baja
-                                        </SelectItem>
-                                        <SelectItem value="medium">
-                                            Media
-                                        </SelectItem>
-                                        <SelectItem value="high">
-                                            Alta
-                                        </SelectItem>
-                                        <SelectItem value="urgent">
-                                            Urgente
-                                        </SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <Label htmlFor="task-date">
-                                    Fecha objetivo
-                                </Label>
-                                <Input
-                                    id="task-date"
-                                    type="date"
-                                    value={dueDate}
-                                    onChange={(event) =>
-                                        setDueDate(event.target.value)
-                                    }
-                                />
-                            </div>
-                        </div>
-                        <div className="space-y-3">
-                            <div className="grid gap-4 sm:grid-cols-2">
-                                <div className="space-y-2">
-                                    <Label htmlFor="task-module">Módulo</Label>
-                                    <div className="relative">
-                                        <Boxes className="absolute top-2.5 left-3 size-4 text-muted-foreground" />
-                                        <Input
-                                            id="task-module"
-                                            list="project-modules"
-                                            className="pl-9"
-                                            value={moduleName}
-                                            onChange={(event) =>
-                                                setModuleName(
-                                                    event.target.value,
-                                                )
-                                            }
-                                            placeholder="Servicio Social"
-                                        />
-                                        <datalist id="project-modules">
-                                            {(project.modules ?? []).map(
-                                                (module) => (
-                                                    <option
-                                                        key={module.id}
-                                                        value={module.name}
-                                                    />
-                                                ),
-                                            )}
-                                        </datalist>
                                     </div>
-                                    <p className="text-xs text-muted-foreground">
-                                        Selecciona uno existente o escribe uno
-                                        nuevo.
-                                    </p>
                                 </div>
                                 <div className="space-y-2">
-                                    <Label htmlFor="task-tags">Etiquetas</Label>
-                                    <div className="relative">
-                                        <Tags className="absolute top-2.5 left-3 size-4 text-muted-foreground" />
-                                        <Input
-                                            id="task-tags"
-                                            className="pl-9"
-                                            value={tagNames}
-                                            onChange={(event) =>
-                                                setTagNames(event.target.value)
-                                            }
-                                            placeholder="backend, reportes, servicio social"
-                                        />
-                                    </div>
-                                    <p className="text-xs text-muted-foreground">
-                                        Separa varias etiquetas con comas.
-                                    </p>
+                                    <Label>Descripción</Label>
+                                    <RichTextEditor
+                                        content={details}
+                                        onChange={setDetails}
+                                    />
                                 </div>
                             </div>
-                            <Label>Responsables</Label>
-                            <div className="grid gap-2 rounded-md border p-3 sm:grid-cols-2">
-                                {(project.members ?? []).map((member) => (
-                                    <label
-                                        key={member.id}
-                                        className="flex cursor-pointer items-center gap-3 rounded px-2 py-1.5 hover:bg-muted"
+                            <SheetFooter className="border-t px-6 py-4 sm:flex-row sm:justify-between">
+                                {task ? (
+                                    <Button
+                                        variant="outline"
+                                        disabled={processing}
+                                        onClick={() => {
+                                            resetForm();
+                                            setEditing(false);
+                                        }}
                                     >
-                                        <Checkbox
-                                            checked={assigneeIds.includes(
-                                                member.id,
-                                            )}
-                                            onCheckedChange={(checked) =>
-                                                setAssigneeIds((current) =>
-                                                    checked
-                                                        ? [
-                                                              ...current,
-                                                              member.id,
-                                                          ]
-                                                        : current.filter(
-                                                              (id) =>
-                                                                  id !==
-                                                                  member.id,
-                                                          ),
-                                                )
-                                            }
-                                        />
-                                        <Avatar user={member} />
-                                        <span className="min-w-0 text-sm">
-                                            <span className="block truncate font-medium">
-                                                {member.name}
+                                        Cancelar
+                                    </Button>
+                                ) : (
+                                    <span />
+                                )}
+                                <Button
+                                    onClick={submit}
+                                    disabled={processing || !title.trim()}
+                                >
+                                    {processing
+                                        ? 'Guardando...'
+                                        : 'Guardar tarea'}
+                                </Button>
+                            </SheetFooter>
+                        </>
+                    ) : (
+                        <>
+                            <div className="space-y-6 px-6 py-5">
+                                <div className="space-y-3">
+                                    <h2 className="text-xl leading-7 font-semibold text-pretty">
+                                        {title}
+                                    </h2>
+                                    <div className="flex flex-wrap gap-2">
+                                        {status && (
+                                            <span
+                                                className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium"
+                                                style={{
+                                                    borderColor: `${status.color}55`,
+                                                    color: status.color,
+                                                    backgroundColor: `${status.color}12`,
+                                                }}
+                                            >
+                                                <span
+                                                    className="size-2 rounded-full"
+                                                    style={{
+                                                        backgroundColor:
+                                                            status.color,
+                                                    }}
+                                                />
+                                                {status.name}
                                             </span>
-                                            <span className="block truncate text-xs text-muted-foreground">
-                                                {member.email}
-                                            </span>
+                                        )}
+                                        <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                                            {priorityLabels[priority]}
                                         </span>
-                                    </label>
-                                ))}
+                                    </div>
+                                </div>
+
+                                <dl className="grid gap-3 sm:grid-cols-2">
+                                    <TaskDetailItem
+                                        label="Fecha de inicio"
+                                        value={startDate || 'Sin fecha'}
+                                    />
+                                    <TaskDetailItem
+                                        label="Fecha objetivo"
+                                        value={dueDate || 'Sin fecha'}
+                                    />
+                                    <TaskDetailItem
+                                        label="Módulo"
+                                        value={moduleName || 'Sin módulo'}
+                                    />
+                                    <TaskDetailItem
+                                        label="Etiquetas"
+                                        value={tagNames || 'Sin etiquetas'}
+                                    />
+                                </dl>
+
+                                <div className="space-y-2">
+                                    <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                                        Responsables
+                                    </p>
+                                    {assignees.length === 0 ? (
+                                        <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                                            Sin responsables asignados.
+                                        </p>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            {assignees.map((member) => (
+                                                <div
+                                                    key={member.id}
+                                                    className="flex min-w-0 items-center gap-3 rounded-md border p-3"
+                                                >
+                                                    <Avatar user={member} />
+                                                    <div className="min-w-0">
+                                                        <p className="truncate text-sm font-medium">
+                                                            {member.name}
+                                                        </p>
+                                                        <p className="truncate text-xs text-muted-foreground">
+                                                            {member.email}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="space-y-2">
+                                    <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                                        Descripción
+                                    </p>
+                                    {detailsText ? (
+                                        <p className="rounded-md border bg-muted/20 p-3 text-sm leading-6 whitespace-pre-wrap">
+                                            {detailsText}
+                                        </p>
+                                    ) : (
+                                        <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                                            Sin descripción.
+                                        </p>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Descripción</Label>
-                            <RichTextEditor
-                                content={details}
-                                onChange={setDetails}
-                            />
-                        </div>
-                    </div>
-                    <SheetFooter className="border-t px-6 py-4 sm:flex-row sm:justify-between">
-                        {task ? (
-                            <Button
-                                variant="ghost"
-                                className="text-destructive hover:text-destructive"
-                                onClick={() => setConfirmDelete(true)}
-                            >
-                                <Trash2 className="size-4" /> Eliminar
-                            </Button>
-                        ) : (
-                            <span />
-                        )}
-                        <Button
-                            onClick={submit}
-                            disabled={processing || !title.trim()}
-                        >
-                            {processing ? 'Guardando...' : 'Guardar tarea'}
-                        </Button>
-                    </SheetFooter>
+                            <SheetFooter className="border-t px-6 py-4 sm:flex-row sm:justify-between">
+                                <Button
+                                    variant="ghost"
+                                    className="text-destructive hover:text-destructive"
+                                    onClick={() => setConfirmDelete(true)}
+                                >
+                                    <Trash2 className="size-4" /> Eliminar
+                                </Button>
+                                <Button onClick={() => setEditing(true)}>
+                                    <Pencil className="size-4" />
+                                    Editar
+                                </Button>
+                            </SheetFooter>
+                        </>
+                    )}
                 </SheetContent>
             </Sheet>
             <Dialog
@@ -1940,6 +2135,23 @@ function TaskSheet({
                 </DialogContent>
             </Dialog>
         </>
+    );
+}
+
+function TaskDetailItem({
+    label,
+    value,
+}: {
+    label: string;
+    value: React.ReactNode;
+}) {
+    return (
+        <div className="rounded-md border p-3">
+            <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                {label}
+            </dt>
+            <dd className="mt-1 text-sm font-medium break-words">{value}</dd>
+        </div>
     );
 }
 
