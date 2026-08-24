@@ -11,20 +11,23 @@ import {
     useSortable,
     verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { Head, router } from '@inertiajs/react';
+import { Head, router, usePage } from '@inertiajs/react';
 import {
     BarChart3,
     Boxes,
     CalendarDays,
     CalendarRange,
     ChartGantt,
+    ChevronDown,
     ChevronLeft,
     ChevronRight,
+    Filter,
     GripVertical,
     LayoutDashboard,
     ListTodo,
     Network,
     Plus,
+    RotateCcw,
     Trash2,
     Tags,
     UserPlus,
@@ -62,10 +65,12 @@ import {
 import type {
     DiagramSummary,
     Project,
+    ProjectMember,
     RichTextDocument,
     RichTextNode,
     Task,
     TaskStatus,
+    UserSummary,
 } from '@/types';
 
 type KanbanColumn = {
@@ -74,6 +79,13 @@ type KanbanColumn = {
 };
 
 type CalendarView = 'day' | 'week' | 'month';
+type TaskDateFilter = 'today' | 'week' | 'with_due_date' | 'overdue' | 'all';
+type TaskAssigneeFilter = 'mine' | 'all' | 'unassigned' | `user-${number}`;
+
+type TaskFilters = {
+    date: TaskDateFilter;
+    assignee: TaskAssigneeFilter;
+};
 
 const emptyDocument: RichTextDocument = {
     type: 'doc',
@@ -108,7 +120,84 @@ function isTaskDone(task: Task): boolean {
     return Boolean(task.completed_at);
 }
 
+function taskAssignees(task: Task): UserSummary[] {
+    return task.assignees ?? (task.assignee ? [task.assignee] : []);
+}
+
+function taskMatchesAssignee(
+    task: Task,
+    assignee: TaskAssigneeFilter,
+    currentUserId: number,
+): boolean {
+    const assignees = taskAssignees(task);
+
+    if (assignee === 'all') {
+        return true;
+    }
+
+    if (assignee === 'unassigned') {
+        return assignees.length === 0;
+    }
+
+    const targetUserId =
+        assignee === 'mine'
+            ? currentUserId
+            : Number(assignee.replace('user-', ''));
+
+    return assignees.some((user) => user.id === targetUserId);
+}
+
+function taskMatchesDate(task: Task, filter: TaskDateFilter): boolean {
+    if (filter === 'all') {
+        return true;
+    }
+
+    const today = formatIsoDate(new Date());
+
+    if (filter === 'with_due_date') {
+        return Boolean(task.due_date);
+    }
+
+    if (!task.due_date) {
+        return false;
+    }
+
+    if (filter === 'today') {
+        return task.due_date === today;
+    }
+
+    if (filter === 'overdue') {
+        return task.due_date < today && !isTaskDone(task);
+    }
+
+    const weekEnd = formatIsoDate(addDays(new Date(), 7));
+
+    return task.due_date >= today && task.due_date <= weekEnd;
+}
+
+function filterColumns(
+    columns: KanbanColumn[],
+    filters: TaskFilters,
+    currentUserId: number,
+): KanbanColumn[] {
+    return columns.map((column) => ({
+        ...column,
+        tasks: column.tasks.filter(
+            (task) =>
+                taskMatchesDate(task, filters.date) &&
+                taskMatchesAssignee(task, filters.assignee, currentUserId),
+        ),
+    }));
+}
+
+function filtersAreDefault(filters: TaskFilters): boolean {
+    return filters.date === 'today' && filters.assignee === 'mine';
+}
+
 export default function ProjectShow({ project }: { project: Project }) {
+    const {
+        props: { auth },
+    } = usePage();
     const [view, setView] = useState<
         'overview' | 'tasks' | 'calendar' | 'gantt'
     >('overview');
@@ -117,12 +206,24 @@ export default function ProjectShow({ project }: { project: Project }) {
     const [newTaskStatusId, setNewTaskStatusId] = useState<number | null>(null);
     const [teamOpen, setTeamOpen] = useState(false);
     const [diagramsOpen, setDiagramsOpen] = useState(false);
+    const [taskFilters, setTaskFilters] = useState<TaskFilters>({
+        date: 'today',
+        assignee: 'mine',
+    });
 
     const columns: KanbanColumn[] = (project.statuses ?? []).map((status) => ({
         status,
         tasks: status.tasks ?? [],
     }));
     const allTasks = columns.flatMap((column) => column.tasks);
+    const filteredColumns = filterColumns(columns, taskFilters, auth.user.id);
+    const filteredTaskCount = filteredColumns.reduce(
+        (total, column) => total + column.tasks.length,
+        0,
+    );
+    const canFilterUsers = Boolean(
+        auth.user.is_admin || project.can_manage_members,
+    );
 
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -199,8 +300,18 @@ export default function ProjectShow({ project }: { project: Project }) {
 
                 {view === 'tasks' && (
                     <>
+                        <TaskFilterBar
+                            filters={taskFilters}
+                            members={project.members ?? []}
+                            currentUserId={auth.user.id}
+                            canFilterUsers={canFilterUsers}
+                            totalTasks={allTasks.length}
+                            visibleTasks={filteredTaskCount}
+                            onChange={setTaskFilters}
+                        />
                         <MobileTaskList
-                            columns={columns}
+                            columns={filteredColumns}
+                            filtersActive={!filtersAreDefault(taskFilters)}
                             onAdd={setNewTaskStatusId}
                             onOpenTask={setSelectedTask}
                         />
@@ -283,7 +394,7 @@ export default function ProjectShow({ project }: { project: Project }) {
                                 }}
                             >
                                 <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto pb-4">
-                                    {columns.map((column) => (
+                                    {filteredColumns.map((column) => (
                                         <KanbanColumnComponent
                                             key={column.status.id}
                                             column={column}
@@ -335,6 +446,143 @@ export default function ProjectShow({ project }: { project: Project }) {
                 onOpenChange={setDiagramsOpen}
             />
         </>
+    );
+}
+
+function TaskFilterBar({
+    filters,
+    members,
+    currentUserId,
+    canFilterUsers,
+    totalTasks,
+    visibleTasks,
+    onChange,
+}: {
+    filters: TaskFilters;
+    members: ProjectMember[];
+    currentUserId: number;
+    canFilterUsers: boolean;
+    totalTasks: number;
+    visibleTasks: number;
+    onChange: (filters: TaskFilters) => void;
+}) {
+    const dateOptions: Array<{ value: TaskDateFilter; label: string }> = [
+        { value: 'today', label: 'Hoy' },
+        { value: 'week', label: 'Semana' },
+        { value: 'with_due_date', label: 'Con cierre' },
+        { value: 'overdue', label: 'Vencidas' },
+        { value: 'all', label: 'Todas' },
+    ];
+    const currentMember = members.find((member) => member.id === currentUserId);
+    const assigneeLabel =
+        filters.assignee === 'mine'
+            ? 'Mis tareas'
+            : filters.assignee === 'all'
+              ? 'Todos'
+              : filters.assignee === 'unassigned'
+                ? 'Sin responsable'
+                : (members.find(
+                      (member) =>
+                          member.id ===
+                          Number(filters.assignee.replace('user-', '')),
+                  )?.name ?? 'Usuario');
+
+    const update = (next: Partial<TaskFilters>) =>
+        onChange({ ...filters, ...next });
+
+    return (
+        <section className="rounded-md border bg-card p-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex min-w-0 items-center gap-2">
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                        <Filter className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">
+                            {visibleTasks} de {totalTasks} tareas
+                        </p>
+                        <p className="truncate text-xs text-muted-foreground">
+                            {assigneeLabel} ·{' '}
+                            {
+                                dateOptions.find(
+                                    (option) => option.value === filters.date,
+                                )?.label
+                            }
+                        </p>
+                    </div>
+                </div>
+
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <div className="flex max-w-full gap-1 overflow-x-auto rounded-md border bg-muted/30 p-1">
+                        {dateOptions.map((option) => (
+                            <Button
+                                key={option.value}
+                                type="button"
+                                variant={
+                                    filters.date === option.value
+                                        ? 'secondary'
+                                        : 'ghost'
+                                }
+                                size="sm"
+                                className="h-8 shrink-0 px-2.5"
+                                onClick={() => update({ date: option.value })}
+                            >
+                                {option.label}
+                            </Button>
+                        ))}
+                    </div>
+
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex">
+                        <Select
+                            value={filters.assignee}
+                            onValueChange={(value) =>
+                                update({
+                                    assignee: value as TaskAssigneeFilter,
+                                })
+                            }
+                        >
+                            <SelectTrigger className="w-full sm:w-48">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="mine">
+                                    Mis tareas
+                                    {currentMember
+                                        ? ` (${currentMember.name})`
+                                        : ''}
+                                </SelectItem>
+                                <SelectItem value="all">Todos</SelectItem>
+                                <SelectItem value="unassigned">
+                                    Sin responsable
+                                </SelectItem>
+                                {canFilterUsers &&
+                                    members.map((member) => (
+                                        <SelectItem
+                                            key={member.id}
+                                            value={`user-${member.id}`}
+                                        >
+                                            {member.name}
+                                        </SelectItem>
+                                    ))}
+                            </SelectContent>
+                        </Select>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            disabled={filtersAreDefault(filters)}
+                            onClick={() =>
+                                onChange({ date: 'today', assignee: 'mine' })
+                            }
+                            title="Restablecer filtros"
+                        >
+                            <RotateCcw className="size-4" />
+                            <span className="sr-only">Restablecer filtros</span>
+                        </Button>
+                    </div>
+                </div>
+            </div>
+        </section>
     );
 }
 
@@ -869,77 +1117,29 @@ function ProjectGantt({
                 })}
             </div>
             <div className="hidden overflow-x-auto md:block">
-            <div
-                className="w-max min-w-full"
-                style={{ width: `max(100%, ${260 + timelineWidth}px)` }}
-            >
-                <div className="sticky top-0 z-20 grid grid-cols-[260px_minmax(0,1fr)] border-b bg-card">
-                    <div className="flex items-end border-r p-3 text-xs font-medium text-muted-foreground">
-                        Tarea
-                    </div>
-                    <div className="min-w-0">
-                        <div className="flex border-b">
-                            {months.map((month) => (
-                                <div
-                                    key={month.key}
-                                    className="border-r px-2 py-1.5 text-xs font-semibold capitalize"
-                                    style={{
-                                        width: `${month.days * dayPercent}%`,
-                                    }}
-                                >
-                                    {month.label}
-                                </div>
-                            ))}
+                <div
+                    className="w-max min-w-full"
+                    style={{ width: `max(100%, ${260 + timelineWidth}px)` }}
+                >
+                    <div className="sticky top-0 z-20 grid grid-cols-[260px_minmax(0,1fr)] border-b bg-card">
+                        <div className="flex items-end border-r p-3 text-xs font-medium text-muted-foreground">
+                            Tarea
                         </div>
-                        <div className="flex">
-                            {days.map((date) => {
-                                const iso = date.toISOString().slice(0, 10);
-                                const weekend =
-                                    date.getDay() === 0 || date.getDay() === 6;
-
-                                return (
+                        <div className="min-w-0">
+                            <div className="flex border-b">
+                                {months.map((month) => (
                                     <div
-                                        key={iso}
-                                        className={`min-w-9 flex-1 border-r py-1.5 text-center ${weekend ? 'bg-muted/50' : ''} ${iso === today ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
+                                        key={month.key}
+                                        className="border-r px-2 py-1.5 text-xs font-semibold capitalize"
+                                        style={{
+                                            width: `${month.days * dayPercent}%`,
+                                        }}
                                     >
-                                        <span className="block text-[9px] uppercase">
-                                            {date.toLocaleDateString('es-MX', {
-                                                weekday: 'narrow',
-                                            })}
-                                        </span>
-                                        <span className="text-xs font-medium tabular-nums">
-                                            {date.getDate()}
-                                        </span>
+                                        {month.label}
                                     </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                </div>
-                {dated.map((task) => {
-                    const startDate =
-                        task.start_date ?? task.created_at.slice(0, 10);
-                    const start = parseDate(startDate);
-                    const end = parseDate(task.due_date!);
-                    const startIndex = Math.round((start - rangeStart) / dayMs);
-                    const duration = Math.max(
-                        Math.round((end - start) / dayMs) + 1,
-                        1,
-                    );
-
-                    return (
-                        <div
-                            key={task.id}
-                            className="grid w-full grid-cols-[260px_minmax(0,1fr)] border-b text-left last:border-b-0 hover:bg-muted/20"
-                        >
-                            <button
-                                type="button"
-                                onClick={() => onOpen(task)}
-                                className="sticky left-0 z-10 flex min-w-0 cursor-pointer items-center border-r bg-card px-3 py-3 text-left text-sm font-medium hover:bg-muted/40"
-                            >
-                                <span className="truncate">{task.title}</span>
-                            </button>
-                            <span className="relative flex h-12 w-full min-w-0">
+                                ))}
+                            </div>
+                            <div className="flex">
                                 {days.map((date) => {
                                     const iso = date.toISOString().slice(0, 10);
                                     const weekend =
@@ -947,31 +1147,89 @@ function ProjectGantt({
                                         date.getDay() === 6;
 
                                     return (
-                                        <span
+                                        <div
                                             key={iso}
-                                            className={`h-full min-w-9 flex-1 border-r ${weekend ? 'bg-muted/35' : ''} ${iso === today ? 'bg-primary/5' : ''}`}
-                                        />
+                                            className={`min-w-9 flex-1 border-r py-1.5 text-center ${weekend ? 'bg-muted/50' : ''} ${iso === today ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
+                                        >
+                                            <span className="block text-[9px] uppercase">
+                                                {date.toLocaleDateString(
+                                                    'es-MX',
+                                                    {
+                                                        weekday: 'narrow',
+                                                    },
+                                                )}
+                                            </span>
+                                            <span className="text-xs font-medium tabular-nums">
+                                                {date.getDate()}
+                                            </span>
+                                        </div>
                                     );
                                 })}
+                            </div>
+                        </div>
+                    </div>
+                    {dated.map((task) => {
+                        const startDate =
+                            task.start_date ?? task.created_at.slice(0, 10);
+                        const start = parseDate(startDate);
+                        const end = parseDate(task.due_date!);
+                        const startIndex = Math.round(
+                            (start - rangeStart) / dayMs,
+                        );
+                        const duration = Math.max(
+                            Math.round((end - start) / dayMs) + 1,
+                            1,
+                        );
+
+                        return (
+                            <div
+                                key={task.id}
+                                className="grid w-full grid-cols-[260px_minmax(0,1fr)] border-b text-left last:border-b-0 hover:bg-muted/20"
+                            >
                                 <button
                                     type="button"
                                     onClick={() => onOpen(task)}
-                                    className="absolute top-2.5 flex h-7 max-w-[calc(100%-6px)] cursor-pointer items-center overflow-hidden rounded bg-primary px-2 text-[10px] font-medium whitespace-nowrap text-primary-foreground shadow-sm"
-                                    style={{
-                                        left: `calc(${startIndex * dayPercent}% + 3px)`,
-                                        width: `max(2rem, calc(${duration * dayPercent}% - 6px))`,
-                                    }}
-                                    title={`${startDate} al ${task.due_date}`}
+                                    className="sticky left-0 z-10 flex min-w-0 cursor-pointer items-center border-r bg-card px-3 py-3 text-left text-sm font-medium hover:bg-muted/40"
                                 >
                                     <span className="truncate">
-                                        {startDate} - {task.due_date}
+                                        {task.title}
                                     </span>
                                 </button>
-                            </span>
-                        </div>
-                    );
-                })}
-            </div>
+                                <span className="relative flex h-12 w-full min-w-0">
+                                    {days.map((date) => {
+                                        const iso = date
+                                            .toISOString()
+                                            .slice(0, 10);
+                                        const weekend =
+                                            date.getDay() === 0 ||
+                                            date.getDay() === 6;
+
+                                        return (
+                                            <span
+                                                key={iso}
+                                                className={`h-full min-w-9 flex-1 border-r ${weekend ? 'bg-muted/35' : ''} ${iso === today ? 'bg-primary/5' : ''}`}
+                                            />
+                                        );
+                                    })}
+                                    <button
+                                        type="button"
+                                        onClick={() => onOpen(task)}
+                                        className="absolute top-2.5 flex h-7 max-w-[calc(100%-6px)] cursor-pointer items-center overflow-hidden rounded bg-primary px-2 text-[10px] font-medium whitespace-nowrap text-primary-foreground shadow-sm"
+                                        style={{
+                                            left: `calc(${startIndex * dayPercent}% + 3px)`,
+                                            width: `max(2rem, calc(${duration * dayPercent}% - 6px))`,
+                                        }}
+                                        title={`${startDate} al ${task.due_date}`}
+                                    >
+                                        <span className="truncate">
+                                            {startDate} - {task.due_date}
+                                        </span>
+                                    </button>
+                                </span>
+                            </div>
+                        );
+                    })}
+                </div>
             </div>
         </section>
     );
@@ -979,66 +1237,125 @@ function ProjectGantt({
 
 function MobileTaskList({
     columns,
+    filtersActive,
     onAdd,
     onOpenTask,
 }: {
     columns: KanbanColumn[];
+    filtersActive: boolean;
     onAdd: (statusId: number) => void;
     onOpenTask: (task: Task) => void;
 }) {
+    const [collapsedStatusIds, setCollapsedStatusIds] = useState<Set<number>>(
+        () => new Set(),
+    );
+    const visibleTasks = columns.reduce(
+        (total, column) => total + column.tasks.length,
+        0,
+    );
+    const toggleStatus = (statusId: number) => {
+        setCollapsedStatusIds((current) => {
+            const next = new Set(current);
+
+            if (next.has(statusId)) {
+                next.delete(statusId);
+            } else {
+                next.add(statusId);
+            }
+
+            return next;
+        });
+    };
+
     return (
         <div className="space-y-4 md:hidden">
+            {visibleTasks === 0 && filtersActive && (
+                <div className="rounded-md border border-dashed bg-card p-4 text-sm text-muted-foreground">
+                    No hay tareas con estos filtros.
+                </div>
+            )}
             {columns.map((column) => (
-                <section
+                <MobileTaskSection
                     key={column.status.id}
-                    className="overflow-hidden rounded-md border bg-card"
-                >
-                    <div className="flex items-center justify-between gap-3 border-b bg-muted/25 px-3 py-2.5">
-                        <div className="flex min-w-0 items-center gap-2">
-                            <span
-                                className="size-2.5 shrink-0 rounded-full"
-                                style={{ backgroundColor: column.status.color }}
-                            />
-                            <h2 className="truncate text-sm font-semibold">
-                                {column.status.name}
-                            </h2>
-                            <span className="text-xs text-muted-foreground">
-                                {column.tasks.length}
-                            </span>
-                        </div>
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8 shrink-0"
-                            onClick={() => onAdd(column.status.id)}
-                            title="Agregar tarea"
-                        >
-                            <Plus className="size-4" />
-                            <span className="sr-only">Agregar tarea</span>
-                        </Button>
-                    </div>
-                    <div className="space-y-2 p-3">
-                        {column.tasks.length === 0 ? (
-                            <button
-                                type="button"
-                                onClick={() => onAdd(column.status.id)}
-                                className="w-full rounded-md border border-dashed p-4 text-sm text-muted-foreground"
-                            >
-                                Agregar primera tarea
-                            </button>
-                        ) : (
-                            column.tasks.map((task) => (
-                                <TaskCard
-                                    key={task.id}
-                                    task={task}
-                                    onOpen={() => onOpenTask(task)}
-                                />
-                            ))
-                        )}
-                    </div>
-                </section>
+                    column={column}
+                    collapsed={collapsedStatusIds.has(column.status.id)}
+                    onToggle={() => toggleStatus(column.status.id)}
+                    onAdd={() => onAdd(column.status.id)}
+                    onOpenTask={onOpenTask}
+                />
             ))}
         </div>
+    );
+}
+
+function MobileTaskSection({
+    column,
+    collapsed,
+    onToggle,
+    onAdd,
+    onOpenTask,
+}: {
+    column: KanbanColumn;
+    collapsed: boolean;
+    onToggle: () => void;
+    onAdd: () => void;
+    onOpenTask: (task: Task) => void;
+}) {
+    return (
+        <section className="overflow-hidden rounded-md border bg-card">
+            <div className="flex items-center justify-between gap-2 border-b bg-muted/25 px-3 py-2.5">
+                <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                    onClick={onToggle}
+                >
+                    <ChevronDown
+                        className={`size-4 shrink-0 text-muted-foreground transition-transform ${collapsed ? '-rotate-90' : ''}`}
+                    />
+                    <span
+                        className="size-2.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: column.status.color }}
+                    />
+                    <h2 className="truncate text-sm font-semibold">
+                        {column.status.name}
+                    </h2>
+                    <span className="text-xs text-muted-foreground">
+                        {column.tasks.length}
+                    </span>
+                </button>
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 shrink-0"
+                    onClick={onAdd}
+                    title="Agregar tarea"
+                >
+                    <Plus className="size-4" />
+                    <span className="sr-only">Agregar tarea</span>
+                </Button>
+            </div>
+            {!collapsed && (
+                <div className="space-y-2 p-3">
+                    {column.tasks.length === 0 ? (
+                        <button
+                            type="button"
+                            onClick={onAdd}
+                            className="w-full rounded-md border border-dashed p-4 text-sm text-muted-foreground"
+                        >
+                            Agregar tarea
+                        </button>
+                    ) : (
+                        column.tasks.map((task) => (
+                            <TaskCard
+                                key={task.id}
+                                task={task}
+                                onOpen={() => onOpenTask(task)}
+                            />
+                        ))
+                    )}
+                </div>
+            )}
+        </section>
     );
 }
 
