@@ -73,10 +73,40 @@ type KanbanColumn = {
     tasks: Task[];
 };
 
+type CalendarView = 'day' | 'week' | 'month';
+
 const emptyDocument: RichTextDocument = {
     type: 'doc',
     content: [{ type: 'paragraph' }],
 };
+
+const dayMs = 86_400_000;
+
+function parseLocalDate(value: string): Date {
+    return new Date(`${value}T00:00:00`);
+}
+
+function formatIsoDate(date: Date): string {
+    return [
+        date.getFullYear(),
+        String(date.getMonth() + 1).padStart(2, '0'),
+        String(date.getDate()).padStart(2, '0'),
+    ].join('-');
+}
+
+function addDays(date: Date, days: number): Date {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+
+function startOfWeek(date: Date): Date {
+    const offset = (date.getDay() + 6) % 7;
+
+    return addDays(date, -offset);
+}
+
+function isTaskDone(task: Task): boolean {
+    return Boolean(task.completed_at);
+}
 
 export default function ProjectShow({ project }: { project: Project }) {
     const [view, setView] = useState<
@@ -134,7 +164,7 @@ export default function ProjectShow({ project }: { project: Project }) {
                     </div>
                 </div>
 
-                <div className="flex w-fit max-w-full gap-1 overflow-x-auto rounded-md border bg-muted/30 p-1">
+                <div className="flex w-full gap-1 overflow-x-auto rounded-md border bg-muted/30 p-1 md:w-fit">
                     {[
                         ['overview', 'Resumen', LayoutDashboard],
                         ['tasks', 'Tareas', ListTodo],
@@ -145,6 +175,7 @@ export default function ProjectShow({ project }: { project: Project }) {
                             key={value as string}
                             variant={view === value ? 'secondary' : 'ghost'}
                             size="sm"
+                            className="shrink-0"
                             onClick={() => setView(value as typeof view)}
                         >
                             <Icon className="size-4" />
@@ -167,94 +198,112 @@ export default function ProjectShow({ project }: { project: Project }) {
                 )}
 
                 {view === 'tasks' && (
-                    <DndContext
-                        sensors={sensors}
-                        onDragStart={({ active }) => {
-                            const task = columns
-                                .flatMap((column) => column.tasks)
-                                .find((item) => item.id === active.id);
-                            setActiveTask(task ?? null);
-                        }}
-                        onDragCancel={() => setActiveTask(null)}
-                        onDragEnd={({ active, over }) => {
-                            setActiveTask(null);
+                    <>
+                        <MobileTaskList
+                            columns={columns}
+                            onAdd={setNewTaskStatusId}
+                            onOpenTask={setSelectedTask}
+                        />
+                        <div className="hidden md:block">
+                            <DndContext
+                                sensors={sensors}
+                                onDragStart={({ active }) => {
+                                    const task = columns
+                                        .flatMap((column) => column.tasks)
+                                        .find((item) => item.id === active.id);
+                                    setActiveTask(task ?? null);
+                                }}
+                                onDragCancel={() => setActiveTask(null)}
+                                onDragEnd={({ active, over }) => {
+                                    setActiveTask(null);
 
-                            if (!over) {
-                                return;
-                            }
-
-                            const taskId = Number(active.id);
-                            const task = columns
-                                .flatMap((column) => column.tasks)
-                                .find((item) => item.id === taskId);
-
-                            if (!task) {
-                                return;
-                            }
-
-                            let targetStatusId: number;
-                            let targetPosition: number;
-
-                            if (String(over.id).startsWith('column-')) {
-                                targetStatusId = Number(
-                                    String(over.id).replace('column-', ''),
-                                );
-                                targetPosition =
-                                    columns.find(
-                                        (column) =>
-                                            column.status.id === targetStatusId,
-                                    )?.tasks.length ?? 0;
-                            } else {
-                                const overTask = columns
-                                    .flatMap((column) => column.tasks)
-                                    .find(
-                                        (item) => item.id === Number(over.id),
-                                    );
-
-                                if (!overTask) {
-                                    return;
-                                }
-
-                                targetStatusId = overTask.task_status_id;
-                                targetPosition = overTask.position;
-                            }
-
-                            if (
-                                task.task_status_id === targetStatusId &&
-                                task.position === targetPosition
-                            ) {
-                                return;
-                            }
-
-                            router.post(
-                                `/api/projects/${project.id}/tasks/reorder`,
-                                {
-                                    task_id: taskId,
-                                    task_status_id: targetStatusId,
-                                    position: targetPosition,
-                                },
-                                { preserveScroll: true },
-                            );
-                        }}
-                    >
-                        <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto pb-4">
-                            {columns.map((column) => (
-                                <KanbanColumnComponent
-                                    key={column.status.id}
-                                    column={column}
-                                    onAdd={() =>
-                                        setNewTaskStatusId(column.status.id)
+                                    if (!over) {
+                                        return;
                                     }
-                                    onOpenTask={setSelectedTask}
-                                />
-                            ))}
+
+                                    const taskId = Number(active.id);
+                                    const task = columns
+                                        .flatMap((column) => column.tasks)
+                                        .find((item) => item.id === taskId);
+
+                                    if (!task) {
+                                        return;
+                                    }
+
+                                    let targetStatusId: number;
+                                    let targetPosition: number;
+
+                                    if (String(over.id).startsWith('column-')) {
+                                        targetStatusId = Number(
+                                            String(over.id).replace(
+                                                'column-',
+                                                '',
+                                            ),
+                                        );
+                                        targetPosition =
+                                            columns.find(
+                                                (column) =>
+                                                    column.status.id ===
+                                                    targetStatusId,
+                                            )?.tasks.length ?? 0;
+                                    } else {
+                                        const overTask = columns
+                                            .flatMap((column) => column.tasks)
+                                            .find(
+                                                (item) =>
+                                                    item.id === Number(over.id),
+                                            );
+
+                                        if (!overTask) {
+                                            return;
+                                        }
+
+                                        targetStatusId =
+                                            overTask.task_status_id;
+                                        targetPosition = overTask.position;
+                                    }
+
+                                    if (
+                                        task.task_status_id ===
+                                            targetStatusId &&
+                                        task.position === targetPosition
+                                    ) {
+                                        return;
+                                    }
+
+                                    router.post(
+                                        `/api/projects/${project.id}/tasks/reorder`,
+                                        {
+                                            task_id: taskId,
+                                            task_status_id: targetStatusId,
+                                            position: targetPosition,
+                                        },
+                                        { preserveScroll: true },
+                                    );
+                                }}
+                            >
+                                <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto pb-4">
+                                    {columns.map((column) => (
+                                        <KanbanColumnComponent
+                                            key={column.status.id}
+                                            column={column}
+                                            onAdd={() =>
+                                                setNewTaskStatusId(
+                                                    column.status.id,
+                                                )
+                                            }
+                                            onOpenTask={setSelectedTask}
+                                        />
+                                    ))}
+                                </div>
+                                <DragOverlay>
+                                    {activeTask && (
+                                        <TaskCard task={activeTask} dragging />
+                                    )}
+                                </DragOverlay>
+                            </DndContext>
                         </div>
-                        <DragOverlay>
-                            {activeTask && (
-                                <TaskCard task={activeTask} dragging />
-                            )}
-                        </DragOverlay>
-                    </DndContext>
+                    </>
                 )}
             </div>
 
@@ -300,7 +349,14 @@ function ProjectOverview({
         .filter((status) => status.is_done)
         .reduce((total, status) => total + (status.tasks?.length ?? 0), 0);
     const progress = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
-    const dated = tasks.filter((task) => task.due_date);
+    const dated = tasks
+        .filter((task) => task.due_date && !isTaskDone(task))
+        .sort((a, b) => {
+            const aStart = a.start_date ?? a.created_at.slice(0, 10);
+            const bStart = b.start_date ?? b.created_at.slice(0, 10);
+
+            return aStart.localeCompare(bStart);
+        });
     const overdue = dated.filter(
         (task) =>
             !task.completed_at &&
@@ -432,109 +488,274 @@ function ProjectCalendar({
     onOpen: (task: Task) => void;
 }) {
     const firstDate = tasks.find((task) => task.due_date)?.due_date;
-    const [month, setMonth] = useState(() => {
-        const date = firstDate ? new Date(`${firstDate}T00:00:00`) : new Date();
+    const [calendarView, setCalendarView] = useState<CalendarView>('week');
+    const [anchorDate, setAnchorDate] = useState(() => {
+        const date = firstDate ? parseLocalDate(firstDate) : new Date();
 
-        return new Date(date.getFullYear(), date.getMonth(), 1);
+        return startOfWeek(date);
     });
-    const offset = (month.getDay() + 6) % 7;
-    const days = new Date(
-        month.getFullYear(),
-        month.getMonth() + 1,
+    const monthStart = new Date(
+        anchorDate.getFullYear(),
+        anchorDate.getMonth(),
+        1,
+    );
+    const monthOffset = (monthStart.getDay() + 6) % 7;
+    const monthDays = new Date(
+        monthStart.getFullYear(),
+        monthStart.getMonth() + 1,
         0,
     ).getDate();
-    const cells = Array.from(
-        { length: Math.ceil((offset + days) / 7) * 7 },
-        (_, index) => index - offset + 1,
+    const monthCells = Array.from(
+        { length: Math.ceil((monthOffset + monthDays) / 7) * 7 },
+        (_, index) => index - monthOffset + 1,
     );
-    const prefix = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`;
+    const weekStart = startOfWeek(anchorDate);
+    const weekDays = Array.from({ length: 7 }, (_, index) =>
+        addDays(weekStart, index),
+    );
+    const dayTasks = (date: Date) => {
+        const iso = formatIsoDate(date);
+
+        return tasks
+            .filter((task) => task.due_date === iso)
+            .sort((a, b) => a.priority.localeCompare(b.priority));
+    };
+    const move = (direction: -1 | 1) => {
+        if (calendarView === 'day') {
+            setAnchorDate(addDays(anchorDate, direction));
+        } else if (calendarView === 'week') {
+            setAnchorDate(addDays(anchorDate, direction * 7));
+        } else {
+            setAnchorDate(
+                new Date(
+                    anchorDate.getFullYear(),
+                    anchorDate.getMonth() + direction,
+                    1,
+                ),
+            );
+        }
+    };
+    const title =
+        calendarView === 'day'
+            ? anchorDate.toLocaleDateString('es-MX', {
+                  weekday: 'long',
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+              })
+            : calendarView === 'week'
+              ? `${weekStart.toLocaleDateString('es-MX', {
+                    day: 'numeric',
+                    month: 'short',
+                })} - ${addDays(weekStart, 6).toLocaleDateString('es-MX', {
+                    day: 'numeric',
+                    month: 'short',
+                    year: 'numeric',
+                })}`
+              : monthStart.toLocaleDateString('es-MX', {
+                    month: 'long',
+                    year: 'numeric',
+                });
 
     return (
         <section className="overflow-hidden rounded-md border bg-card">
-            <div className="flex items-center justify-between border-b p-4">
-                <h2 className="font-semibold capitalize">
-                    {month.toLocaleDateString('es-MX', {
-                        month: 'long',
-                        year: 'numeric',
-                    })}
-                </h2>
-                <div className="flex gap-2">
+            <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                    <p className="text-xs font-medium text-muted-foreground">
+                        Calendario
+                    </p>
+                    <h2 className="truncate font-semibold capitalize">
+                        {title}
+                    </h2>
+                </div>
+                <div className="flex items-center gap-2 overflow-x-auto">
+                    <div className="flex shrink-0 rounded-md border bg-muted/30 p-1">
+                        {[
+                            ['day', 'Día'],
+                            ['week', 'Semana'],
+                            ['month', 'Mes'],
+                        ].map(([value, label]) => (
+                            <Button
+                                key={value}
+                                variant={
+                                    calendarView === value
+                                        ? 'secondary'
+                                        : 'ghost'
+                                }
+                                size="sm"
+                                className="h-7 px-2.5"
+                                onClick={() =>
+                                    setCalendarView(value as CalendarView)
+                                }
+                            >
+                                {label}
+                            </Button>
+                        ))}
+                    </div>
                     <Button
                         variant="outline"
                         size="icon"
-                        onClick={() =>
-                            setMonth(
-                                new Date(
-                                    month.getFullYear(),
-                                    month.getMonth() - 1,
-                                    1,
-                                ),
-                            )
-                        }
+                        className="shrink-0"
+                        onClick={() => move(-1)}
                     >
                         <ChevronLeft className="size-4" />
                     </Button>
                     <Button
                         variant="outline"
                         size="icon"
-                        onClick={() =>
-                            setMonth(
-                                new Date(
-                                    month.getFullYear(),
-                                    month.getMonth() + 1,
-                                    1,
-                                ),
-                            )
-                        }
+                        className="shrink-0"
+                        onClick={() => move(1)}
                     >
                         <ChevronRight className="size-4" />
                     </Button>
                 </div>
             </div>
-            <div className="grid grid-cols-7 border-b bg-muted/30 text-center text-xs text-muted-foreground">
-                {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(
-                    (day) => (
-                        <div key={day} className="p-2">
-                            {day}
-                        </div>
-                    ),
+
+            {calendarView === 'day' && (
+                <CalendarAgendaDay
+                    date={anchorDate}
+                    tasks={dayTasks(anchorDate)}
+                    onOpen={onOpen}
+                />
+            )}
+
+            {calendarView === 'week' && (
+                <div className="divide-y md:grid md:grid-cols-7 md:divide-y-0">
+                    {weekDays.map((date) => (
+                        <CalendarAgendaDay
+                            key={formatIsoDate(date)}
+                            date={date}
+                            tasks={dayTasks(date)}
+                            onOpen={onOpen}
+                            compact
+                        />
+                    ))}
+                </div>
+            )}
+
+            {calendarView === 'month' && (
+                <>
+                    <div className="grid grid-cols-7 border-b bg-muted/30 text-center text-xs text-muted-foreground">
+                        {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(
+                            (day) => (
+                                <div key={day} className="p-2">
+                                    {day}
+                                </div>
+                            ),
+                        )}
+                    </div>
+                    <div className="grid grid-cols-7">
+                        {monthCells.map((day, index) => {
+                            const date = new Date(
+                                monthStart.getFullYear(),
+                                monthStart.getMonth(),
+                                day,
+                            );
+                            const items =
+                                day > 0 && day <= monthDays
+                                    ? dayTasks(date)
+                                    : [];
+
+                            return (
+                                <div
+                                    key={index}
+                                    className="min-h-24 border-r border-b p-1.5 sm:min-h-28 sm:p-2"
+                                >
+                                    {day > 0 && day <= monthDays && (
+                                        <>
+                                            <span className="text-xs text-muted-foreground">
+                                                {day}
+                                            </span>
+                                            <div className="mt-1 space-y-1">
+                                                {items
+                                                    .slice(0, 2)
+                                                    .map((task) => (
+                                                        <CalendarTaskButton
+                                                            key={task.id}
+                                                            task={task}
+                                                            onOpen={onOpen}
+                                                        />
+                                                    ))}
+                                                {items.length > 2 && (
+                                                    <span className="block rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
+                                                        +{items.length - 2}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </>
+            )}
+        </section>
+    );
+}
+
+function CalendarAgendaDay({
+    date,
+    tasks,
+    onOpen,
+    compact = false,
+}: {
+    date: Date;
+    tasks: Task[];
+    onOpen: (task: Task) => void;
+    compact?: boolean;
+}) {
+    return (
+        <div className={compact ? 'p-3 md:min-h-48' : 'p-4'}>
+            <div className="mb-3 flex items-baseline justify-between gap-3">
+                <div>
+                    <p className="text-xs font-medium text-muted-foreground capitalize">
+                        {date.toLocaleDateString('es-MX', {
+                            weekday: 'long',
+                        })}
+                    </p>
+                    <p className="text-lg font-semibold tabular-nums">
+                        {date.getDate()}
+                    </p>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                    {tasks.length}
+                </span>
+            </div>
+            <div className="space-y-2">
+                {tasks.length === 0 ? (
+                    <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                        Sin tareas
+                    </p>
+                ) : (
+                    tasks.map((task) => (
+                        <CalendarTaskButton
+                            key={task.id}
+                            task={task}
+                            onOpen={onOpen}
+                        />
+                    ))
                 )}
             </div>
-            <div className="grid grid-cols-7">
-                {cells.map((day, index) => {
-                    const date = `${prefix}-${String(day).padStart(2, '0')}`;
-                    const items = tasks.filter(
-                        (task) => task.due_date === date,
-                    );
+        </div>
+    );
+}
 
-                    return (
-                        <div
-                            key={index}
-                            className="min-h-28 border-r border-b p-2"
-                        >
-                            {day > 0 && day <= days && (
-                                <>
-                                    <span className="text-xs text-muted-foreground">
-                                        {day}
-                                    </span>
-                                    <div className="mt-1 space-y-1">
-                                        {items.map((task) => (
-                                            <button
-                                                key={task.id}
-                                                onClick={() => onOpen(task)}
-                                                className="block w-full truncate rounded bg-primary/10 px-1.5 py-1 text-left text-[10px] font-medium text-primary"
-                                            >
-                                                {task.title}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </>
-                            )}
-                        </div>
-                    );
-                })}
-            </div>
-        </section>
+function CalendarTaskButton({
+    task,
+    onOpen,
+}: {
+    task: Task;
+    onOpen: (task: Task) => void;
+}) {
+    return (
+        <button
+            type="button"
+            onClick={() => onOpen(task)}
+            className="block w-full rounded-md bg-primary/10 px-2 py-1.5 text-left text-xs font-medium text-primary hover:bg-primary/15"
+        >
+            <span className="line-clamp-2">{task.title}</span>
+        </button>
     );
 }
 
@@ -555,7 +776,6 @@ function ProjectGantt({
         );
     }
 
-    const dayMs = 86_400_000;
     const dayWidth = 36;
     const parseDate = (date: string) => new Date(`${date}T00:00:00`).getTime();
     const starts = dated.map((task) =>
@@ -595,7 +815,60 @@ function ProjectGantt({
     const dayPercent = 100 / dayCount;
 
     return (
-        <section className="overflow-x-auto rounded-md border bg-card">
+        <section className="rounded-md border bg-card">
+            <div className="border-b p-4">
+                <h2 className="font-semibold">Gantt</h2>
+                <p className="text-sm text-muted-foreground">
+                    Tareas activas con fechas. Las tareas terminadas quedan
+                    fuera de esta vista.
+                </p>
+            </div>
+            <div className="divide-y md:hidden">
+                {dated.map((task) => {
+                    const startDate =
+                        task.start_date ?? task.created_at.slice(0, 10);
+
+                    return (
+                        <button
+                            key={task.id}
+                            type="button"
+                            onClick={() => onOpen(task)}
+                            className="flex w-full flex-col gap-2 p-4 text-left hover:bg-muted/30"
+                        >
+                            <span className="line-clamp-2 text-sm font-medium">
+                                {task.title}
+                            </span>
+                            <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <CalendarDays className="size-3.5" />
+                                {startDate} - {task.due_date}
+                            </span>
+                            <span className="h-2 rounded-full bg-muted">
+                                <span
+                                    className="block h-full rounded-full bg-primary"
+                                    style={{
+                                        width: `${Math.min(
+                                            Math.max(
+                                                Math.round(
+                                                    ((parseDate(
+                                                        task.due_date!,
+                                                    ) -
+                                                        parseDate(startDate)) /
+                                                        dayMs +
+                                                        1) *
+                                                        18,
+                                                ),
+                                                18,
+                                            ),
+                                            100,
+                                        )}%`,
+                                    }}
+                                />
+                            </span>
+                        </button>
+                    );
+                })}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
             <div
                 className="w-max min-w-full"
                 style={{ width: `max(100%, ${260 + timelineWidth}px)` }}
@@ -683,21 +956,89 @@ function ProjectGantt({
                                 <button
                                     type="button"
                                     onClick={() => onOpen(task)}
-                                    className="absolute top-2.5 flex h-7 cursor-pointer items-center overflow-hidden rounded bg-primary px-2 text-[10px] font-medium whitespace-nowrap text-primary-foreground shadow-sm"
+                                    className="absolute top-2.5 flex h-7 max-w-[calc(100%-6px)] cursor-pointer items-center overflow-hidden rounded bg-primary px-2 text-[10px] font-medium whitespace-nowrap text-primary-foreground shadow-sm"
                                     style={{
                                         left: `calc(${startIndex * dayPercent}% + 3px)`,
-                                        width: `calc(${duration * dayPercent}% - 6px)`,
+                                        width: `max(2rem, calc(${duration * dayPercent}% - 6px))`,
                                     }}
                                     title={`${startDate} al ${task.due_date}`}
                                 >
-                                    {startDate} → {task.due_date}
+                                    <span className="truncate">
+                                        {startDate} - {task.due_date}
+                                    </span>
                                 </button>
                             </span>
                         </div>
                     );
                 })}
             </div>
+            </div>
         </section>
+    );
+}
+
+function MobileTaskList({
+    columns,
+    onAdd,
+    onOpenTask,
+}: {
+    columns: KanbanColumn[];
+    onAdd: (statusId: number) => void;
+    onOpenTask: (task: Task) => void;
+}) {
+    return (
+        <div className="space-y-4 md:hidden">
+            {columns.map((column) => (
+                <section
+                    key={column.status.id}
+                    className="overflow-hidden rounded-md border bg-card"
+                >
+                    <div className="flex items-center justify-between gap-3 border-b bg-muted/25 px-3 py-2.5">
+                        <div className="flex min-w-0 items-center gap-2">
+                            <span
+                                className="size-2.5 shrink-0 rounded-full"
+                                style={{ backgroundColor: column.status.color }}
+                            />
+                            <h2 className="truncate text-sm font-semibold">
+                                {column.status.name}
+                            </h2>
+                            <span className="text-xs text-muted-foreground">
+                                {column.tasks.length}
+                            </span>
+                        </div>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-8 shrink-0"
+                            onClick={() => onAdd(column.status.id)}
+                            title="Agregar tarea"
+                        >
+                            <Plus className="size-4" />
+                            <span className="sr-only">Agregar tarea</span>
+                        </Button>
+                    </div>
+                    <div className="space-y-2 p-3">
+                        {column.tasks.length === 0 ? (
+                            <button
+                                type="button"
+                                onClick={() => onAdd(column.status.id)}
+                                className="w-full rounded-md border border-dashed p-4 text-sm text-muted-foreground"
+                            >
+                                Agregar primera tarea
+                            </button>
+                        ) : (
+                            column.tasks.map((task) => (
+                                <TaskCard
+                                    key={task.id}
+                                    task={task}
+                                    onOpen={() => onOpenTask(task)}
+                                />
+                            ))
+                        )}
+                    </div>
+                </section>
+            ))}
+        </div>
     );
 }
 
@@ -1307,10 +1648,10 @@ function TeamDialog({
     return (
         <>
             <Dialog open={open} onOpenChange={onOpenChange}>
-                <DialogContent>
+                <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto p-4 sm:max-w-2xl sm:p-6">
                     <DialogHeader>
                         <DialogTitle>Equipo del proyecto</DialogTitle>
-                        <DialogDescription>
+                        <DialogDescription className="text-pretty">
                             Los miembros pueden ver el tablero, editar tareas y
                             trabajar en los diagramas.
                         </DialogDescription>
@@ -1319,51 +1660,55 @@ function TeamDialog({
                         {(project.members ?? []).map((member) => (
                             <div
                                 key={member.id}
-                                className="flex items-center gap-3 rounded-md border p-3"
+                                className="flex min-w-0 flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center"
                             >
-                                <Avatar user={member} />
-                                <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm font-medium">
-                                        {member.name}
-                                    </p>
-                                    <p className="truncate text-xs text-muted-foreground">
-                                        {member.email}
-                                    </p>
+                                <div className="flex min-w-0 items-center gap-3">
+                                    <Avatar user={member} />
+                                    <div className="min-w-0 flex-1">
+                                        <p className="line-clamp-2 text-sm leading-5 font-medium">
+                                            {member.name}
+                                        </p>
+                                        <p className="truncate text-xs text-muted-foreground">
+                                            {member.email}
+                                        </p>
+                                    </div>
                                 </div>
-                                <span className="text-xs text-muted-foreground">
-                                    {member.role === 'owner'
-                                        ? 'Propietario'
-                                        : 'Miembro'}
-                                </span>
-                                {project.can_manage_members &&
-                                    member.role !== 'owner' && (
-                                        <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="size-8"
-                                            title="Quitar miembro"
-                                            disabled={
-                                                removingMemberId !== null ||
-                                                processing
-                                            }
-                                            onClick={() =>
-                                                setMemberToRemove({
-                                                    id: member.id,
-                                                    name: member.name,
-                                                })
-                                            }
-                                        >
-                                            <Trash2 className="size-4" />
-                                            <span className="sr-only">
-                                                Quitar miembro
-                                            </span>
-                                        </Button>
-                                    )}
+                                <div className="flex items-center justify-between gap-2 sm:ml-auto">
+                                    <span className="text-xs text-muted-foreground">
+                                        {member.role === 'owner'
+                                            ? 'Propietario'
+                                            : 'Miembro'}
+                                    </span>
+                                    {project.can_manage_members &&
+                                        member.role !== 'owner' && (
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="size-8"
+                                                title="Quitar miembro"
+                                                disabled={
+                                                    removingMemberId !== null ||
+                                                    processing
+                                                }
+                                                onClick={() =>
+                                                    setMemberToRemove({
+                                                        id: member.id,
+                                                        name: member.name,
+                                                    })
+                                                }
+                                            >
+                                                <Trash2 className="size-4" />
+                                                <span className="sr-only">
+                                                    Quitar miembro
+                                                </span>
+                                            </Button>
+                                        )}
+                                </div>
                             </div>
                         ))}
                     </div>
                     {project.can_manage_members && (
-                        <div className="flex gap-2">
+                        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                             <Input
                                 type="email"
                                 value={email}
@@ -1373,6 +1718,7 @@ function TeamDialog({
                                 placeholder="persona@empresa.com"
                             />
                             <Button
+                                className="w-full sm:w-auto"
                                 disabled={
                                     !email ||
                                     processing ||
