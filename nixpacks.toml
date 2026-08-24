@@ -3,6 +3,9 @@ NIXPACKS_PHP_ROOT_DIR = "/app/public"
 NIXPACKS_PHP_FALLBACK_PATH = "/index.php"
 NODE_ENV = "production"
 
+[phases.setup]
+nixPkgs = ["...", "php83"]
+
 [phases.build]
 cmds = [
     "...",
