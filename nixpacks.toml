@@ -1,8 +1,12 @@
 [variables]
+NIXPACKS_NODE_VERSION="22"
 NIXPACKS_PHP_ROOT_DIR = "/app/public"
 NIXPACKS_PHP_FALLBACK_PATH = "/index.php"
 
 [phases.setup]
+# nixpkgs fijo para parches de seguridad de PHP (nixos-26.05, 21 oct 2026: php82 8.2.35, php83 8.3.36, php84 8.4.27).
+# Para volver a parchar: apuntar a un commit más nuevo de nixos-26.05. Revertir: quitar esta línea.
+nixpkgsArchive = "da6dc0e7b26060f2f71ce3ef7088fb56ee44fa36"
 nixPkgs = ["...", "php84"]
 
 [phases.build]
